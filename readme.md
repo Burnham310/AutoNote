@@ -1,4 +1,4 @@
-<img src="doc/logo.png" style="width: 15%;" />
+<img src="doc/logo.png" style="width: 10%;" />
 
 # AutoNote
 
