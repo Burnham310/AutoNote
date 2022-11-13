@@ -1,3 +1,5 @@
+<img src="doc/logo.png" style="zoom: 15%;" />
+
 # AutoNote
 
 new generation review-sheet generator
