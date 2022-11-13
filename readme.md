@@ -1,8 +1,6 @@
-<img src="doc/logo.png" style="zoom: 15%;" />
+<img src="doc/logo.png" style="width: 10%;" />
 
-# AutoNote
-
-new generation review-sheet generator
+A new generation review-sheet generator
 
 ## Feature
 
