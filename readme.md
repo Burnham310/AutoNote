@@ -1,6 +1,6 @@
 <img src="doc/logo.png" style="width: 10%;" />
 
-A new generation review-sheet generator
+*A new generation review-sheet generator*
 
 ## Feature
 
