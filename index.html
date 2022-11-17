@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="./css/bootstrap.min.css">
+    <link rel="stylesheet" href="./css/simplemde.min.css">
+
+    <title>Hello, world!</title>
+</head>
+<body>
+<h1>Hello world</h1>
+<div class="container-fluid">
+    <textarea  id="textbox"></textarea >
+</div>
+<!-- Optional JavaScript -->
+<!-- jQuery first, then Popper.js, then Bootstrap JS -->
+<script src="./js/jquery-3.6.1.min.js"></script>
+<script src="./js/popper.min.js"></script>
+<script src="./js/bootstrap.min.js"></script>
+<script src="./js/simplemde.min.js"></script>
+<script src="./js/marked.min.js"></script>
+<script src="js/utils.js"></script>
+
+<script>
+    var simplemde = new SimpleMDE({
+        autofocus: true,
+        autosave: {
+            enabled: true,
+            uniqueId: genNonDuplicateID(),
+            delay: 1000,
+        },
+        blockStyles: {
+            bold: "__",
+            italic: "_"
+        },
+        element: $("#textbox")[0],
+        forceSync: true,
+        indentWithTabs: false,
+        insertTexts: {
+            horizontalRule: ["", "\n\n-----\n\n"],
+            image: ["![](http://", ")"],
+            link: ["[", "](http://)"],
+            table: ["", "\n\n| Column 1 | Column 2 | Column 3 |\n| -------- | -------- | -------- |\n| Text     | Text      | Text     |\n\n"],
+        },
+        lineWrapping: false,
+        placeholder: "Type here...",
+        previewRender: function(plainText) {
+            return marked.parse(plainText); // Returns HTML from a custom parser
+        },
+        previewRender: function(plainText, preview) { // Async method
+            setTimeout(function(){
+                preview.innerHTML = marked.parse(plainText);
+            }, 250);
+
+            return "Rendering...";
+        },
+        promptURLs: true,
+        renderingConfig: {
+            singleLineBreaks: false,
+            codeSyntaxHighlighting: true,
+        },
+        spellChecker: false,
+        status: false,
+        styleSelectedText: false,
+        tabSize: 4,
+    });
+</script>
+
+</body>
+</html>
