@@ -1,0 +1,8 @@
+.devcontainer/
+.vscode/
+Dockerfile
+.DS_Store
+.idea
+build/
+bin/
+obj/
