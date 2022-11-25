@@ -1,3 +1,6 @@
+
+
+
 jQuery(function() {
   $("#addButton").on('click', function() {
       addMarkDownArea();
@@ -6,7 +9,7 @@ jQuery(function() {
 
 
 
-var MARKDOWN_AREAS = {};
+var QUESTIONTS_CT = 1;
 
 
 
@@ -17,13 +20,28 @@ function genNonDuplicateID(){
 
 function addMarkDownArea() {
 
-  // const  = genNonDuplicateID();
-  // var new_textbox = $(`<div class="row"><textarea class="textbox"></textarea></div>`);
-  var new_textbox = document.createElement("textarea");
-  $("#container").append(new_textbox);
-  console.log($(".row:last-child").first()[0]);
-  var simplemde = new SimpleMDE({
-    element: new_textbox
-  });
+  // const id = genNonDuplicateID();
+  
+  $("#container").append($(
+    `<div class='row question-row'>
+      <div class="col-md-1">
+        <div class="row">
+          <div class="col">
+            <button class="btn btn-danger btn-block side-btn">X</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <button class="btn btn-primary btn-block side-btn">&uarr;</button>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-11">
+        <lable for='question${QUESTIONTS_CT}'>Questions ${QUESTIONTS_CT}</lable>
+        <textarea class='form-control question' id='question${QUESTIONTS_CT}'></textarea>
+      </div>
+    </div>`));
+
+  QUESTIONTS_CT += 1;
 
 }
