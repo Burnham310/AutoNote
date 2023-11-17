@@ -1,0 +1,322 @@
+#define LINUX
+
+#include <linux/module.h>
+#include <linux/proc_fs.h>
+#include <linux/kernel.h>
+#include <linux/slab.h>
+#include <linux/timer.h>
+#include <linux/kthread.h>
+#include <linux/workqueue.h>
+#include <linux/vmalloc.h>
+#include <linux/mm.h>
+#include <linux/cdev.h>
+#include "mp3_given.h"
+
+static struct workqueue_struct *my_workqueue;
+static struct delayed_work my_work;
+
+// !!!!!!!!!!!!! IMPORTANT !!!!!!!!!!!!!
+// Please put your name and email here
+MODULE_AUTHOR("Yiwei Gong <yiweig3@illinois.edu>");
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("CS-423 MP2");
+
+#define DEBUG 1
+
+#ifndef DEBUG
+#undef pr_info
+#define pr_info(fmt, ...)
+#endif
+
+
+static struct proc_dir_entry* mp2_entry;
+static struct proc_dir_entry* status_entry;
+
+
+typedef struct {
+	pid_t pid;
+	size_t period;
+	size_t process_time;
+	size_t prev_period_jiffies;
+	struct list_head list;
+	struct timer_list timer;
+	struct task_struct* task;
+} pid_list_node;
+static struct list_head pid_list;
+static size_t pid_list_len = 0;
+static struct kmem_cache *list_cache;
+static struct mutex m;
+static const size_t page = 1024 * 4;
+static const size_t queue_buffer_size = 128 * page;
+static char* queue_buffer = NULL;
+static size_t queue_pos = 0;
+static unsigned long min_flt = 0, maj_flt = 0, utime = 0, stime = 0, total_time = 0;
+
+static dev_t profile_devno = MKDEV(423, 0);
+static struct cdev profile_cdev;
+
+
+
+
+static loff_t status_fseek_callback(struct file* f, loff_t off, int whence) {
+	pr_info("fseek %i %lli\n", whence, off);
+	if (whence == SEEK_SET) {
+		f->f_pos = off;
+		return off;
+		
+	}
+    
+	return 0;
+}
+
+static pid_list_node* find_node(pid_t pid) {
+	pid_list_node* node = NULL;
+	list_for_each_entry(node, &pid_list, list) {
+		if (node->pid == pid) return node;
+	}
+	return NULL;
+}
+
+
+
+
+// initialize the node's field
+static void init_node(pid_list_node* node, pid_t pid, size_t period, size_t process_time, struct task_struct* task) {
+	node->period = period;
+	node->pid = pid;
+	node->process_time = process_time;
+	node->prev_period_jiffies = 0;
+	node->task = task;
+	memset(&node->timer, 0, sizeof(struct timer_list));
+}
+
+static void monitor_process_work(struct work_struct *work) {
+    // Your work to be done periodically
+    unsigned long min_flt_p, maj_flt_p, utime_p, stime_p;
+    unsigned long j = jiffies;
+    pid_list_node* node = NULL;
+    // pr_warn("Workqueue: Executing work...\n");
+    
+    // Reschedule the work to run after the specified interval
+    queue_delayed_work(my_workqueue, &my_work, msecs_to_jiffies(50)); // HZ is a constant representing ticks per second
+    mutex_lock(&m);
+	list_for_each_entry(node, &pid_list, list) {
+		WARN_ON(get_cpu_use(node->pid, &min_flt_p, &maj_flt_p, &utime_p, &stime_p) == -1);
+        min_flt += min_flt_p;
+        maj_flt += maj_flt_p;
+        utime += utime_p;
+        stime += stime_p;
+	}
+
+	mutex_unlock(&m);
+    total_time = stime + utime;
+
+    memcpy(queue_buffer + queue_pos, &j, 8);
+    queue_pos = (queue_pos + 8) % queue_buffer_size;
+    memcpy(queue_buffer + queue_pos, &min_flt, 8);
+    queue_pos = (queue_pos + 8) % queue_buffer_size;
+    memcpy(queue_buffer + queue_pos, &maj_flt, 8);
+    queue_pos = (queue_pos + 8) % queue_buffer_size;
+    memcpy(queue_buffer + queue_pos, &total_time, 8);
+    queue_pos = (queue_pos + 8) % queue_buffer_size;
+}
+// write callback for registering user pid
+// `off` is basically ignored
+// This function does no check for duplicate pid
+// R,PID,PERIOD,COMPUTATION
+static ssize_t status_write_callback(struct file * f, const char __user * usr, size_t n, loff_t * off) {
+	char* buf = kmalloc(n, 0);
+	char c;
+	pid_t pid = -1;
+	size_t period;
+	size_t process_time;
+	pid_list_node* node = NULL;
+	int scan_res;
+	WARN_ON(copy_from_user(buf, usr, n) != 0);
+	scan_res = sscanf(buf, "%c %i", &c,&pid);
+	pr_info("write buf[%i]: %c %i\n", scan_res,c, pid);
+	if (scan_res == 2 && c == 'R') {
+		struct task_struct* task;
+
+		if ((task = find_task_by_pid(pid)) == NULL) {
+			goto out;
+		}
+		pr_info("register\n");
+		// initialize the node
+		node = kmem_cache_alloc(list_cache, GFP_KERNEL);
+		init_node(node, pid, period, process_time, task);
+		mutex_lock(&m);
+		list_add(&node->list, &pid_list);
+		pid_list_len += 1;
+        if (pid_list_len == 1) {
+            // Create a workqueue
+            my_workqueue = create_workqueue("mp3_workqueue");
+            // Initialize the delayed work
+            INIT_DELAYED_WORK(&my_work, monitor_process_work);
+            queue_delayed_work(my_workqueue, &my_work, msecs_to_jiffies(50));
+            pr_info("workqueue init\n");
+        }
+		mutex_unlock(&m);
+	} else if (scan_res == 2 && c == 'U') {
+        node = find_node(pid);
+        if (node == NULL) {
+            pr_info("pid no registered\n");
+            goto out;
+        }
+        mutex_lock(&m);
+		list_del(&node->list);
+		pid_list_len -= 1;
+        if (pid_list_len == 0) {
+            cancel_delayed_work_sync(&my_work);
+            // Flush and destroy the workqueue
+            flush_workqueue(my_workqueue);
+            destroy_workqueue(my_workqueue);
+            pr_info("workqueue destroyed\n");
+        }
+		mutex_unlock(&m);
+    }
+out:
+	*off += n;
+	return n;
+}
+// read callback for getting user pid and cpu_time
+// For simplicity, we allocated the entire buffer regardless of the value of `n` and `off`
+ssize_t	status_read_callback(struct file * f, char __user * usr, size_t n, loff_t * off) {
+	pid_list_node* node = NULL;
+	ssize_t bytes_read = 0;
+	ssize_t total = 0;
+	ssize_t size;
+	char* buf =  kmalloc(64 * pid_list_len, 0);
+	pr_info("read n: %zu, off: %lli\n", n, *off);
+	pr_info("pid_list_len: %zu\n", pid_list_len);
+	mutex_lock(&m);
+	list_for_each_entry(node, &pid_list, list) {
+		if (total >= n) break;
+		size = snprintf(buf + total, n - total + *off, "%i\n",  node->pid);
+		pr_info("read size: %li\n", size);
+		total += size;
+	}
+	mutex_unlock(&m);
+	// pr_warn("read total: %li\n",  total);
+	if (*off >= total) {
+		kfree(buf);
+		return 0;
+	}
+
+	bytes_read = total - *off;
+	WARN_ON(copy_to_user(usr, buf + *off, bytes_read) != 0);
+	*off += bytes_read;
+	kfree(buf);
+	pr_info("bytes_read: %zu\n", bytes_read);
+	return bytes_read;
+	
+}
+static struct proc_ops status_ops = {.proc_write = status_write_callback, .proc_read = status_read_callback, .proc_lseek = status_fseek_callback};
+
+static int profile_device_open(struct inode *i, struct file *f) {
+    return 0;
+}
+
+// static int profile_device_close(struct inode *i, struct file *f) {
+
+//     return 0;
+// }
+static int profile_device_mmap(struct file * f, struct vm_area_struct * vm) {
+    unsigned long size = vm->vm_end - vm->vm_start;
+    int ret = 0;
+    size_t i;
+    if (size > queue_buffer_size) return -EINVAL;
+    for (i = 0; i < size; i += page) {
+        unsigned long pfn = vmalloc_to_pfn(queue_buffer + i);
+        ret = remap_pfn_range(vm, vm->vm_start+i, pfn, page, vm->vm_page_prot);
+    }
+    
+    return ret;
+}
+static struct file_operations device_ops = {.owner=THIS_MODULE, .open=profile_device_open, .mmap=profile_device_mmap};
+// the function of the thread responsible for dispatching
+// at the end of every iteration we put ourself to sleep
+
+
+int __init mp2_init(void)
+{
+#ifdef DEBUG
+	printk(KERN_ALERT "MP3 MODULE LOADING\n");
+#endif
+    unsigned long i;
+    struct page* pp;
+	pr_info("initializing mutex\n");
+	mutex_init(&m);
+	pr_info("create /proc/mp3\n");
+	mp2_entry = proc_mkdir("mp3", NULL);
+	if (mp2_entry == NULL) {
+		pr_warn("faield to create /proc/mp3\n");
+		return -ENOMEM;
+	}
+	pr_info("create /proc/mp2/status\n");
+	status_entry = proc_create("status", 0, mp2_entry, &status_ops);
+	if (status_entry == NULL) {
+		pr_warn("faield to create /proc/mp2/status\n");
+		return -ENOMEM;
+	}
+	pr_info("initializing pid list\n");
+	INIT_LIST_HEAD(&pid_list);
+	list_cache = kmem_cache_create("list_cache", sizeof(pid_list_node), 0, SLAB_HWCACHE_ALIGN, NULL);
+	if (!list_cache) {
+        printk(KERN_ERR "Failed to create slab cache\n");
+        return -ENOMEM;
+    }
+    queue_buffer = vmalloc(queue_buffer_size);
+    for(i = 0; i < queue_buffer_size; i += page) {
+        // pr_info("buffer %p %zu %p\n", queue_buffer, i, queue_buffer + i);
+        pp = vmalloc_to_page(queue_buffer + i);
+        SetPageReserved(pp);
+    }
+    pr_info("initializing profile device\n");
+    register_chrdev_region(profile_devno, 1, "page_fault_profile_dev");
+    cdev_init(&profile_cdev, &device_ops);
+    profile_cdev.owner = THIS_MODULE;
+    cdev_add(&profile_cdev, profile_devno, 1);
+	printk(KERN_ALERT "MP3 MODULE LOADED\n");
+	return 0;
+}
+
+// mp2_exit - Called when module is unloaded
+void __exit mp2_exit(void)
+{
+	pid_list_node *node = NULL;
+	pid_list_node *tmp = NULL;
+#ifdef DEBUG
+	printk(KERN_ALERT "MP2 MODULE UNLOADING\n");
+#endif
+	// Insert your code here ...
+
+	pr_info("Goodbye\n");
+	if (status_entry) {
+		pr_info("remove /proc/mp3/status\n");
+		proc_remove(status_entry);
+	}
+
+	if (mp2_entry) {
+		pr_info("remove /proc/mp2\n");
+		proc_remove(mp2_entry);
+	}
+    vfree(queue_buffer);
+	pr_info("Deinit list\n");
+	mutex_lock(&m);
+	list_for_each_entry_safe(node, tmp, &pid_list, list) {
+		del_timer_sync(&node->timer);
+		list_del(&node->list);
+        kmem_cache_free(list_cache, node);
+    }
+	mutex_unlock(&m);
+    pr_info("deinit cdev");
+    unregister_chrdev_region(profile_devno, 1);
+	cdev_del(&profile_cdev);
+	mutex_destroy(&m);
+	printk(KERN_ALERT "MP2 MODULE UNLOADED\n");
+}
+
+// Register init and exit funtions
+module_init(mp2_init);
+module_exit(mp2_exit);
