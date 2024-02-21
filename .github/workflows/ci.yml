@@ -1,14 +1,10 @@
-name: CI Build
-
-on: [push]
+name: Actions Runner Controller Demo
+on:
+  workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ultraman-k8s-self-runner # Use your self-hosted runner
+  Explore-GitHub-Actions:
+    # You need to use the INSTALLATION_NAME from the previous step
+    runs-on: arc-runner
     steps:
-    - uses: actions/checkout@v2
-    - name: Run a script
-      run: |
-        echo "Hello, world!"
-        echo "This runs on a self-hosted runner."
-
+    - run: echo "🎉 This job uses runner scale set runners!"
